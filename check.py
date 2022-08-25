@@ -1,6 +1,7 @@
 import re
 import json
 import time
+from typing import Optional
 import requests
 from datetime import datetime
 
@@ -11,7 +12,7 @@ BASE_URL = "https://healthreport.zju.edu.cn/ncov/wap/default/index"
 SUBMIT_URL = 'https://healthreport.zju.edu.cn/ncov/wap/default/save'
 LOGIN_URL = "https://zjuam.zju.edu.cn/cas/login?service=http%3A%2F%2Fservice.zju.edu.cn%2F"
 REDIRECT_URL = "https://zjuam.zju.edu.cn/cas/login?service=https%3A%2F%2Fhealthreport.zju.edu.cn%2Fa_zju%2Fapi%2Fsso%2Findex%3Fredirect%3Dhttps%253A%252F%252Fhealthreport.zju.edu.cn%252Fncov%252Fwap%252Fdefault%252Findex%26from%3Dwap"
-SC_KEY = "xxxxxx"
+SC_KEY = ""
 
 
 def rsa_encrypt(password_str, e_str, M_str):
@@ -46,12 +47,12 @@ def login(username, password, sess: requests.Session):
     return sess
 
 
-def get_geo_info(lng, lat) -> dict:
+def get_geo_info(lnglat) -> dict:
     params = (
         ('key', '729923f88542d91590470f613adb27b5'),
         ('s', 'rsv3'),
         ('language', 'zh_cn'),
-        ('location', f'{lng},{lat}'),
+        ('location', f'{lnglat[0]},{lnglat[1]}'),
         ('extensions', 'base'),
         ('callback', 'jsonp_376062_'),
         ('platform', 'JS'),
@@ -72,7 +73,7 @@ def get_default(sess: requests.Session):
     return default
 
 
-def generate_form_param(geo_info: dict, default: dict):
+def generate_form_param(geo_info: dict, default: dict, campus: Optional[str], control_measures: Optional[str]):
 
     formatted_address = geo_info["regeocode"]["formatted_address"]
     address_component = geo_info["regeocode"]["addressComponent"]
@@ -83,6 +84,7 @@ def generate_form_param(geo_info: dict, default: dict):
 
     id = default.get('id', '')
     uid = default.get('uid', '')
+    created_uid = default.get('created_uid', '0')
     date = default.get('date', datetime.now().strftime("%Y%m%d"))
     created = default.get('created', round(time.time()))
     sfyxjzxgym = default.get('sfyxjzxgym', '')
@@ -104,9 +106,8 @@ def generate_form_param(geo_info: dict, default: dict):
         "pois": []
     }
     info_arg = {
-        'sfqtyyqjwdg': '0',  # 今日是否因发热外的其他原因请假未到岗（教职工）或未返校（学生）？
-        'sffrqjwdg': '0',  # 今日是否因发热请假未到岗（教职工）或未返校（学生）？
-        'jrdqtlqk': [],  # 今日dqtl情况
+        'sfqtyyqjwdg': '',  # 今日是否因发热外的其他原因请假未到岗（教职工）或未返校（学生）？
+        'sffrqjwdg': '',  # 今日是否因发热请假未到岗（教职工）或未返校（学生）？
         'sfhsjc': '',  # Deprecated
 
         'zgfx14rfh': "0",  # Deprecated
@@ -122,22 +123,30 @@ def generate_form_param(geo_info: dict, default: dict):
         'jcjgqr': "0",  # Deprecated
         'jcjg': '',  # Deprecated
 
-        'sfcxzysx': "0",  # 是否有涉及涉疫情的管控措施
-        'qksm': '',  # 如有，情况说明
+        'sfcxzysx': "1" if control_measures else "0",  # 是否有涉及涉疫情的管控措施
+        'qksm': control_measures,  # 如有，情况说明 例如'处于防范区管控'
         'remark': '',  # 如有，情况说明
 
         'szgj': "",  # 所在国家，默认为中国
+        'sfsfbh': '0',
+        'jhfjrq': '',
+        'jhfjjtgj': '',
+        'jhfjhbcc': '',
+        'jhfjsftjwh': '0',
+        'jhfjsftjhb': '0',
+        'szsqsfybl': '0',
+        'gwszgz': '',
         'gwszgzcs': "",  # 所在城市
         'szgjcs': '',  # 所在国家 + 所在城市
 
         'address': formatted_address,  # 格式化地址
-        'geo_api_info': geo_api_info_dict,
         # 地理位置
         'area': f"{province} {city} {district}",
         'province': province,  # 地理位置
         'city': city,  # 地理位置
-        'sfzx': '1',  # 是否在校
-        'campus': '宁波校区',  # 所在校区
+        'geo_api_info': json.dumps(geo_api_info_dict, ensure_ascii=False, separators=(',', ':')),
+        'sfzx': '1' if campus else '0',  # 是否在校
+        'campus': campus,  # 所在校区
         'sfymqjczrj': "0",  # 是否存在发热症状、红黄码状态或者14天内从境外返校情况
         'sfjcwhry': "0",  # Deprecated
         'sfjchbry': "0",  # Deprecated
@@ -146,9 +155,11 @@ def generate_form_param(geo_info: dict, default: dict):
         'jcbhlx': '',  # 接触病患类型
         'jcbhrq': '',  # 接触病患人群
 
-        'ismoved': 0,  # "0" ?
+        'ismoved': "5",  # 2离省 3离市 4出境 5无
+        'fxyy': '',
         'bztcyy': '',  # 不在同城原因
-        'sftjhb': "",  # 是否途径湖北 "0" ?
+        'fjsj': '0',
+        'sftjhb': "",  # 是否途径湖北
         'sftjwh': "0",  # 是否途径武汉
 
         'sfjcqz': "",  # 是否接触确诊
@@ -162,10 +173,16 @@ def generate_form_param(geo_info: dict, default: dict):
         'jrsfqzfy': "",  # 今日是否确诊返阴
 
         'tw': '0',  # 是否发热
-        'sfyqjzgc': "",  # 是否到具有发热门诊（诊室）的医疗机构就诊？
+        'sfyqjzgc': "0",  # 是否到具有发热门诊（诊室）的医疗机构就诊？
+        # 'jrdqtlqk': [],  # 今日dqtl情况
+        'jrdqjcqk': '',  # 今日定期检查情况？
+        'jcwhryfs': '',
+        'jchbryfs': '',
 
-        'sfsqhzjkk': "1",  # 是否已经申领校区所在地健康码
+        'sfsqhzjkk': "0",  # 是否已经申领校区所在地健康码
         'sqhzjkkys': "1",  # 今日申领健康码的状态 1: '绿', 2: '红', 3: '黄', 4: '橙'
+        'sfygtjzzfj': '0',
+        'gtjzzfjsj': '',
 
         'zjdfgj': '',  # 近14日到访过的国家/地区
 
@@ -173,7 +190,7 @@ def generate_form_param(geo_info: dict, default: dict):
         # 如有
         'cfgj': '',  # 国家或地区
         'tjgj': '',  # 途经国家
-        'nrjrq': 0,  # 拟入境日期
+        'nrjrq': "0",  # 拟入境日期
         'rjka': '',  # 入境口岸
         'jnmddsheng': '',  # 境内目的地
         'jnmddshi': '',  # 境内目的地
@@ -183,16 +200,19 @@ def generate_form_param(geo_info: dict, default: dict):
         'rjjtfs1': '',  # 其他入境交通方式
         'rjjtgjbc': '',  # 入境交通工具
         'jnjtfs': '',  # 境内交通方式
-        'jnjtgjbc': '',  # 境内交通工具
         'jnjtfs1': '',  # 其他境内交通方式
+        'jnjtgjbc': '',  # 境内交通工具
 
         # new
         'internship': "1",  # 实习情况 "1": '否', "2": '校内', "3": "校外"
-        'sfqrxxss': 1,  # 是否确认信息属实
+        'gwszdd': '',
+        'xjzd': "",
+        'sfqrxxss': "1",  # 是否确认信息属实
         'verifyCode': '',
 
-        "uid": uid,
         "id": id,
+        "uid": uid,
+        'created_uid': created_uid,
         'date': date,
         'created': created,
 
@@ -202,20 +222,20 @@ def generate_form_param(geo_info: dict, default: dict):
     return info_arg
 
 
-def check_in(username, password, lng, lat, sess=requests.Session()):
+def check_in(username, password, lnglat, campus, control_measures, sess=requests.Session()):
     """ """
     login(username, password, sess)
 
     sess.get(REDIRECT_URL)
 
-    geo_info = get_geo_info(lng, lat)
+    geo_info = get_geo_info(lnglat)
 
     if 'regeocode' not in geo_info:
         raise RuntimeError("无法获取地理位置信息")
 
     default = get_default(sess)
 
-    data = generate_form_param(geo_info, default)
+    data = generate_form_param(geo_info, default, campus, control_measures)
     response = sess.post(SUBMIT_URL, data=data, headers=headers)
 
     return response.json()
@@ -232,9 +252,18 @@ def push(title: str, desp: str) -> bool:
     return res.json().get("errmsg") == "success"
 
 
+if not SC_KEY:
+    push = print
+
 if __name__ == "__main__":
+    student_id = 'xxx'
+    password = 'xxx'
+    lnglat = (121.63529, 29.89154)
+    campus = "宁波校区"
+    control_measures = ""
+
     try:
-        res = check_in('xxxxxx', 'xxxxxx', 121.63529, 29.89154)
+        res = check_in(student_id, password, lnglat, campus, control_measures)
         if '今天已经填报了' in res['m']:
             push("【浙大健康打卡】今日已打卡", f"今日已打卡, 返回消息为: {res}")
         else:
