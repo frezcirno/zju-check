@@ -25,7 +25,7 @@ def rsa_encrypt(password_str, e_str, M_str):
 
 
 def login(username, password, sess: requests.Session):
-    """Login to ZJU platform"""
+    """ Login to ZJU platform """
     res = sess.get(LOGIN_URL, headers=headers)
     execution = re.search('name="execution" value="(.*?)"', res.text).group(1)
     res = sess.get('https://zjuam.zju.edu.cn/cas/v2/getPubKey', headers=headers).json()
@@ -67,13 +67,29 @@ def get_geo_info(lnglat) -> dict:
     return json.loads(s.group(1) if s else "{}")
 
 
-def get_default(sess: requests.Session):
+def generate_form_param(geo_info: dict, campus: Optional[str], control_measures: Optional[str], sess: requests.Session):
+    """ 构造表单参数 """
     res = sess.get(BASE_URL, headers=headers)
-    default = json.loads(re.findall(r'var def ?= ?(\{.*?\});', res.text, re.S)[0])
-    return default
+    if not res.ok:
+        raise RuntimeError(f"Get base page failed {res.status_code} {res.reason}")
 
+    html = res.text
 
-def generate_form_param(geo_info: dict, default: dict, campus: Optional[str], control_measures: Optional[str]):
+    old_info = json.loads(re.findall(r'oldInfo: ?(\{[^\n]*\})', html)[0])
+    if not old_info:
+        raise RuntimeError("未发现缓存信息，请先至少手动成功打卡一次再运行脚本")
+
+    def_info = json.loads(re.findall(r'def ?= ?(\{[^\n]*\})', html, re.S)[0])
+
+    magic_code = re.findall(
+        r'"([0-9a-z]{32})": "([0-9]{10})","([0-9a-z]{32})":"([0-9a-z]{32})"', html)[0]
+    if len(magic_code) != 4:
+        raise RuntimeError("未发现magic_code")
+
+    magic_code_group = {
+        magic_code[0]: magic_code[1],
+        magic_code[2]: magic_code[3]
+    }
 
     formatted_address = geo_info["regeocode"]["formatted_address"]
     address_component = geo_info["regeocode"]["addressComponent"]
@@ -81,15 +97,6 @@ def generate_form_param(geo_info: dict, default: dict, campus: Optional[str], co
     province = address_component['province']
     city = address_component['city']
     district = address_component['district']
-
-    id = default.get('id', '')
-    uid = default.get('uid', '')
-    created_uid = default.get('created_uid', '0')
-    date = default.get('date', datetime.now().strftime("%Y%m%d"))
-    created = default.get('created', round(time.time()))
-    sfyxjzxgym = default.get('sfyxjzxgym', '')
-    sfbyjzrq = default.get('sfbyjzrq', 0)
-    jzxgymqk = default.get('jzxgymqk', 0)
 
     geo_api_info_dict = {
         "type": "complete",
@@ -105,7 +112,22 @@ def generate_form_param(geo_info: dict, default: dict, campus: Optional[str], co
         "crosses": [],
         "pois": []
     }
+
     info_arg = {
+        "id": '',
+        "uid": '',
+        'created_uid': '0',
+        'date': datetime.now().strftime("%Y%m%d"),
+        'created': round(time.time()),
+        'sfyxjzxgym': '',  # 是否愿意接种新冠疫苗
+        'sfbyjzrq': '0',  # 是否不宜接种人群
+        'jzxgymqk': '0',  # 接种新冠疫苗情况，1是已接种第一针，4是已接种第二针（已满6个月），5是已接种第二针（未满6个月），6是已接种第三针，3是未接种
+    }
+
+    info_arg.update(def_info)
+    del info_arg['jrdqtlqk']  # removed
+
+    info_arg.update({
         'sfqtyyqjwdg': '',  # 今日是否因发热外的其他原因请假未到岗（教职工）或未返校（学生）？
         'sffrqjwdg': '',  # 今日是否因发热请假未到岗（教职工）或未返校（学生）？
         'sfhsjc': '',  # Deprecated
@@ -113,10 +135,6 @@ def generate_form_param(geo_info: dict, default: dict, campus: Optional[str], co
         'zgfx14rfh': "0",  # Deprecated
         'zgfx14rfhdd': '',  # Deprecated
         'zgfx14rfhsj': '',  # Deprecated
-
-        'sfyxjzxgym': sfyxjzxgym,  # 是否愿意接种新冠疫苗
-        'sfbyjzrq': sfbyjzrq,  # 是否不宜接种人群
-        'jzxgymqk': jzxgymqk,  # 接种新冠疫苗情况，1是已接种第一针，4是已接种第二针（已满6个月），5是已接种第二针（未满6个月），6是已接种第三针，3是未接种，记得自己改
 
         'sfcxtz': "0",  # Deprecated
         'sfyyjc': "0",  # Deprecated
@@ -174,7 +192,6 @@ def generate_form_param(geo_info: dict, default: dict, campus: Optional[str], co
 
         'tw': '0',  # 是否发热
         'sfyqjzgc': "0",  # 是否到具有发热门诊（诊室）的医疗机构就诊？
-        # 'jrdqtlqk': [],  # 今日dqtl情况
         'jrdqjcqk': '',  # 今日定期检查情况？
         'jcwhryfs': '',
         'jchbryfs': '',
@@ -209,16 +226,12 @@ def generate_form_param(geo_info: dict, default: dict, campus: Optional[str], co
         'xjzd': "",
         'sfqrxxss': "1",  # 是否确认信息属实
         'verifyCode': '',
+    })
+    info_arg.update(magic_code_group)
 
-        "id": id,
-        "uid": uid,
-        'created_uid': created_uid,
-        'date': date,
-        'created': created,
+    if len(info_arg) != 90:
+        raise RuntimeError("打卡问卷可能更新，请检查并更新代码")
 
-        "dcb5384288532e0bf74f0fa1b0de1ba8": "1660699774",
-        "7faf908a57fe96c6bd99e9a074a02ec2": "544c9f9f7eb3a755bd7894dd509557b4"
-    }
     return info_arg
 
 
@@ -226,16 +239,16 @@ def check_in(username, password, lnglat, campus, control_measures, sess=requests
     """ """
     login(username, password, sess)
 
-    sess.get(REDIRECT_URL)
+    res = sess.get(REDIRECT_URL)
+    if not res.ok:
+        raise RuntimeError(f"Redirect failed {res.status_code} {res.reason}")
 
     geo_info = get_geo_info(lnglat)
-
     if 'regeocode' not in geo_info:
-        raise RuntimeError("无法获取地理位置信息")
+        raise RuntimeError("获取地理位置信息失败")
 
-    default = get_default(sess)
+    data = generate_form_param(geo_info, campus, control_measures, sess)
 
-    data = generate_form_param(geo_info, default, campus, control_measures)
     response = sess.post(SUBMIT_URL, data=data, headers=headers)
 
     return response.json()
@@ -256,9 +269,9 @@ if not SC_KEY:
     push = print
 
 if __name__ == "__main__":
-    student_id = 'xxx'
-    password = 'xxx'
-    lnglat = (121.63529, 29.89154)
+    student_id = ''
+    password = ''
+    lnglat = (121.63529, 29.89154)  # 宁波
     campus = "宁波校区"
     control_measures = ""
 
